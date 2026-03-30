@@ -4,3 +4,6 @@
 .*
 !.gitignore
 access_token.md
+node_modules
+dist
+build

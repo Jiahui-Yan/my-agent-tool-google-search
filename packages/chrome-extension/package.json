@@ -1,0 +1,31 @@
+{
+	"name": "google-search-for-agent",
+	"version": "0.0.1",
+	"main": "dist/index.js",
+	"type": "commonjs",
+	"scripts": {
+		"build": "tsc -p tsconfig.json && copyfiles -u 1 manifest.json dist",
+		"watch-vite": "vite build --watch",
+		"watch-rolldown": "cd src/content_scripts && rolldown -c rolldown.config.ts -w",
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"build:options": "vite build --config vite.options.config.ts",
+		"dev:options": "vite --config vite.options.config.ts"
+	},
+	"author": "",
+	"license": "ISC",
+	"description": "",
+	"devDependencies": {
+		"@types/chrome": "^0.1.38",
+		"@types/node": "^25.5.0",
+		"@vitejs/plugin-vue": "^6.0.5",
+		"@vitejs/plugin-vue-jsx": "^5.1.5",
+		"@vue/babel-preset-jsx": "^1.4.0",
+		"ant-design-vue": "^4.2.6",
+		"copyfiles": "^2.4.1",
+		"tsc": "^2.0.4",
+		"typescript": "^6.0.2",
+		"vite": "^8.0.3",
+		"vite-plugin-static-copy": "^4.0.0",
+		"vue": "^3.5.31"
+	}
+}
