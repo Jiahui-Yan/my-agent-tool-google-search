@@ -27,6 +27,6 @@ const App = {
 	}
 }
 
-console.log("hello");
+
 
 createApp(App).mount('#app')

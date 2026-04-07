@@ -1,5 +1,4 @@
-
-
+import { DispatcherCommunicationTimeoutError, message, msgDef } from "../message";
 
 
 function timeout(ms: number) {
@@ -11,44 +10,87 @@ function timeout(ms: number) {
 
 console.log("baidu content script loaded");
 
+/**
+ * json 格式的搜索结果条目定义
+ */
 interface SearchResultEntry {
+
 	url: string;
+
 	title: string;
+
 	summary: string;
 
+	/**
+	 * tpl 类型，调试用，用于快速确定有问题的结果类型
+	 */
 	tpl: string
 }
 
+function defineResultEntry(entry: SearchResultEntry): SearchResultEntry {
+	return entry;
+}
 
 interface TplType {
 
-	// tpl: string;
+	/**
+	 * 用于提取结果标题的选择器，值不能为空字符串
+	 */
 	title_selector: string
 
+	/**
+	 * 用于提取结果摘要的选择器，值可以为空字符串，因为有些结果没有提供提要（可能是因为网站声明不允许搜索引擎抓取内容）
+	 */
 	summary_selector: string;
 
+	/**
+	 * 是否允许 summary 元素缺失，因为同样的搜索结果类型，有的结果没有提供提要（可能是因为网站声明不允许搜索引擎抓取内容）
+	 */
 	summary_may_be_missing?: boolean;
 
+	/**
+	 * 有些 tpl 类型不需要处理，比如【大家都在搜】
+	 */
 	skip?: boolean
 
+
+	/**
+	 * 有些搜索结果具有子集（比如视频搜索、学术搜索）
+	 */
 	subsets?: SubsetsDefinition;
 
+
+	/**
+	 * 有些 tpl 类型需要需要单独提取url
+	 * @param entry_el 当前搜索结果条目的根元素
+	 */
 	url_extractor?: (entry_el: HTMLElement) => string;
 }
 
 // 搜索结果子集定义，子集的结果由专用的提取器提取
 interface SubsetsDefinition {
+	/**
+	 * 子集选择器，指定了包含子集条目的元素
+	 */
 	selector: string;
 
+	/**
+	 * 子集条目选择器，指定了每个子集条目的元素
+	 */
 	entry_selector: string;
 
-	entries_extractor: SubsetsExtractor;
+	/**
+	 * 子集条目提取器，负责从每个子集条目的元素中提取出搜索结果条目
+	 */
+	entries_extractor: EntriesExtractor;
 
-	// 当前子集的超集内容提取器
-	superset_extractor?: SubsetsExtractor
+	/**
+	 * 当前子集的超集内容提取器
+	 */
+	superset_extractor?: EntriesExtractor
 }
 
-
+// 搜索结果页面中带有 tpl 属性的结果才是有用的结果，以下是不同从 tpl 类型提取 url、title 和 summary 的配置。对于一些复杂的 tpl 类型，结果条目可能包含一个子集，子集中的每个条目都需要单独提取，这时可以使用 subsets 定义来指定子集的选择器和提取器。
 const tpls: Record<string, TplType> = {
 	"sg_kg_entity_san": {
 		title_selector: '.ec_title,.kg-title_a60kU',
@@ -276,18 +318,24 @@ const tpls: Record<string, TplType> = {
 
 }
 
-
+/**
+ * 百家号搜索结果将 url 存储在一个 data-show-ext 的属性中，这个属性的值是一个 JSON 字符串，包含了 url 和其他一些信息，但我们只需要 url
+ */
 interface BaiJiaHaoData {
 	url: string
 }
 
 
 
-
-interface SubsetsExtractor {
+/**
+ * 结果条目提取器，函数实现不能抛出异常
+ * 
+ * @param entry_el 当前搜索结果条目的根元素
+ * @param index 当前搜索结果条目在其父容器中的索引位置，从0开始，属于预留参数，目前没什么实际用途，未来可能有用
+ */
+interface EntriesExtractor {
 	(entry_el: HTMLElement, index: number): SearchResultEntry[];
 }
-
 
 
 function out<T>(value: T | undefined = undefined): Out<T> {
@@ -314,80 +362,105 @@ class SearchResultEntryEl {
 
 	}
 
+	get dispatcher() {
+		return this.page.dispatcher;
+	}
+
 	get tpl() {
 		const tpl = this.entry_el.getAttribute('tpl');
 		return tpl;
 	}
 
-	tryGetEntry(out: Out<SearchResultEntry[]>): boolean {
+	*tryGetEntry(): Generator<SearchResultEntry> {
 
-		out.value = undefined;
+		try {
 
-		const tpl = this.tpl;
+			const tpl = this.tpl;
 
-		if (!tpl) return false;
+			if (!tpl) return false;
 
-		const config = tpls[tpl];
-		if (!config) {
-			throw this.page.el_error(this.entry_el, `Unknown result entry template type '${tpl}'`);
-		}
-
-		if (config.skip) return false;
-
-		if (config.subsets) {
-
-			const subsets_el = this.entry_el.querySelector<HTMLElement>(config.subsets.selector)!;
-
-			const entries_els = subsets_el.querySelectorAll<HTMLElement>(config.subsets.entry_selector);
-
-			const entries: SearchResultEntry[] = [];
-
-			config.subsets.superset_extractor?.(this.entry_el, 0).forEach(e => entries.push(e));
-
-			for (let i = 0, len = entries_els.length; i < len; i++) {
-				const entry_el = entries_els[i]!;
-
-				const subset_entries = config.subsets.entries_extractor(entry_el, i);
-				entries.push(...subset_entries);
+			const config = tpls[tpl];
+			if (!config) {
+				throw this.page.el_error(this.entry_el, `Unknown result entry template type '${tpl}'`);
 			}
 
-			out.value = entries;
-			return true;
-		}
+			if (config.skip) return false;
+
+			if (config.subsets) {
+
+				const subsets_el = this.entry_el.querySelector<HTMLElement>(config.subsets.selector)!;
+
+				const entries_els = subsets_el.querySelectorAll<HTMLElement>(config.subsets.entry_selector);
 
 
-		const title_el = this.entry_el.querySelector<HTMLElement>(config.title_selector);
-		if (!title_el) {
-			throw this.page.el_error(this.entry_el, `Result entry with tpl '${tpl}' missing title element with selector '${config.title_selector}'`);
-		}
+				const superset_extractor = config.subsets.superset_extractor;
+				if (superset_extractor) {
 
-		let summary: string = '';
-		if (config.summary_selector) {
-			let summary_el = this.entry_el.querySelector<HTMLElement>(config.summary_selector);
-			if (!summary_el) {
-				if (config.summary_may_be_missing) {
-					summary_el = title_el;
-				} else {
-					throw this.page.el_error(this.entry_el, `Result entry with tpl '${tpl}' missing summary element with selector '${config.summary_selector}'`);
+					try {
+						for (const e of superset_extractor(this.entry_el, 0)) {
+							yield e;
+						}
+					} catch (e) {
+						this.page.dispatcher.logError(e as Error);
+					}
+
 				}
+
+				for (let i = 0, len = entries_els.length; i < len; i++) {
+					const entry_el = entries_els[i]!;
+
+					try {
+						const subset_entries = config.subsets.entries_extractor(entry_el, i);
+						for (const e of subset_entries) {
+							yield e;
+						}
+					} catch (e) {
+						this.page.dispatcher.logError(e as Error);
+					}
+				}
+
+				return;
 			}
 
-			summary = summary_el.innerText.trim();
+			const title_el = this.entry_el.querySelector<HTMLElement>(config.title_selector);
+			if (!title_el) {
+				throw this.page.el_error(this.entry_el, `Result entry with tpl '${tpl}' missing title element with selector '${config.title_selector}'`);
+			}
+
+			let summary: string = '';
+			if (config.summary_selector) {
+				let summary_el = this.entry_el.querySelector<HTMLElement>(config.summary_selector);
+				if (!summary_el) {
+					if (config.summary_may_be_missing) {
+						summary_el = title_el;
+					} else {
+						throw this.page.el_error(this.entry_el, `Result entry with tpl '${tpl}' missing summary element with selector '${config.summary_selector}'`);
+					}
+				}
+
+				summary = summary_el.innerText.trim();
+			}
+
+			yield {
+				url: this.getUrl(config),
+				title: title_el!.innerText.trim(),
+				summary: summary,
+				tpl
+			}
+
+		} catch (e) {
+			this.page.dispatcher.logError(e as Error);
 		}
 
 
-
-		out.value = [{
-			url: this.getUrl(config),
-			title: title_el!.innerText.trim(),
-			summary: summary,
-			tpl
-		}]
 
 		return true;
 	}
 
 
+	/**
+	 * 通用的 url 提取逻辑
+	 */
 	private get _url() {
 
 		const url = this.entry_el.getAttribute('mu');
@@ -397,6 +470,9 @@ class SearchResultEntryEl {
 		return url;
 	}
 
+	/**
+	 * 保证一定能获取到 url 的提取逻辑，优先使用 config 中的 url_extractor，如果没有定义，则使用通用的 url 提取逻辑
+	 */
 	private getUrl(config: TplType): string {
 		if (config.url_extractor) {
 			return config.url_extractor(this.entry_el);
@@ -407,7 +483,9 @@ class SearchResultEntryEl {
 	}
 }
 
-
+/**
+ * 表示百度搜索页面
+ */
 class BaiduSearchPage {
 
 	el_error(el: Element, msg: string): ElementError {
@@ -415,7 +493,6 @@ class BaiduSearchPage {
 	}
 
 	async search(query: string): Promise<SearchResultEntry[]> {
-
 
 		const setInput = () => {
 
@@ -435,53 +512,59 @@ class BaiduSearchPage {
 			btn.dispatchEvent(new MouseEvent('click'));
 		}
 
-		setInput();
-		clickSearchButton();
+		try {
+			setInput();
+			clickSearchButton();
+		} catch (e) {
+			this.dispatcher.logError(e as Error);
+			return [];
+		}
 
 		return await this.extractResults();
 	}
 
 	async extractResults(): Promise<SearchResultEntry[]> {
 
-		const tryGetResultContainer = async () => {
+		try {
+			const tryGetResultContainer = async () => {
 
-			for (let i = 0; i < 10; i++) {
-				const container = document.querySelector<HTMLDivElement>('#content_left');
-				if (container) {
-					return container;
-				} else {
-					await timeout(1000);
+				for (let i = 0; i < 10; i++) {
+					const container = document.querySelector<HTMLDivElement>('#content_left');
+					if (container) {
+						return container;
+					} else {
+						await timeout(1000);
+					}
 				}
+
+				throw this.el_error(document.body, "Search results container not found (#content_left) after waiting 10 seconds");
 			}
 
-			throw this.el_error(document.body, "Search results container not found (#content_left) after waiting 10 seconds");
-		}
+			const enumResutEntry = async () => {
 
-		const enumResutEntry = async () => {
+				const container = await tryGetResultContainer();
 
-			const container = await tryGetResultContainer();
+				// enum each child element of container
 
-			// enum each child element of container
+				function* enumChildEntries(this: BaiduSearchPage) {
+					for (let i = 0, len = container.children.length; i < len; i++) {
+						const entry_el = container.children[i] as HTMLDivElement;
+						const entry = new SearchResultEntryEl(entry_el, this);
 
-			function* enumChildEntries(this: BaiduSearchPage) {
-				for (let i = 0, len = container.children.length; i < len; i++) {
-					const entry_el = container.children[i] as HTMLDivElement;
-					const entry = new SearchResultEntryEl(entry_el, this);
-
-					const out_entry = out<SearchResultEntry[]>();
-
-					if (entry.tryGetEntry(out_entry)) {
-						for (const e of out_entry.value!) {
+						for (const e of entry.tryGetEntry()) {
 							yield e;
 						}
 					}
 				}
+
+				return [...enumChildEntries.call(this)];
 			}
 
-			return [...enumChildEntries.call(this)];
+			return await enumResutEntry();
+		} catch (e) {
+			this.dispatcher.logError(e as Error);
+			return [];
 		}
-
-		return await enumResutEntry();
 	}
 
 	private _content_left: HTMLDivElement | null = null;
@@ -495,62 +578,81 @@ class BaiduSearchPage {
 		return this._content_left !== null;
 	}
 
-	init(): BaiduSearchPage {
+	dispatcher!: DispatcherPage;
+
+	init(dispatcher: DispatcherPage): BaiduSearchPage {
+		this.dispatcher = dispatcher;
 		return this;
 	}
 }
 
 
+class DispatcherPage {
 
 
+	logError(error: Error) {
+		console.error(error);
+		message.logError.send(error);
+	}
 
+	async getSearchTask(): Promise<msgDef.GetSearchTaskResponseMessage | undefined> {
 
+		for (let i = 0; i < 5; i++) {
+			try {
+				const result = await message.getSearchTask.send();
+				return result;
+			} catch (e) {
+				if (DispatcherCommunicationTimeoutError.is(e)) {
 
+				} else {
+					this.logError(e as Error);
+					break;
+				}
+			}
 
-/**
- * Checks if the search results page has loaded by looking for the presence of the #page element, which contains the search results. This is a simple heuristic and may need to be adjusted if Baidu changes their page structure.
- */
-function page_exists() {
-	return document.querySelector('#page') !== null;
-}
-
-/**
- * Ensures that the search results page has loaded by repeatedly checking for the presence of the #page element.
- * Waits for a maximum of 10 seconds, checking every second.
- */
-async function ensure_page_exists() {
-	for (let i = 0; i < 10; i++) {
-		if (page_exists()) {
-			return true;
-		} else {
 			await timeout(1000);
 		}
+
+		return undefined;
 	}
-	return false;
+
+	reportSearchResult(results: SearchResultEntry[]) {
+		message.reportSearchResult.send(results);
+	}
+}
+
+
+
+/**
+ * 执行搜索任务
+ * 
+ * 创建必要对象，获取搜索任务，执行搜索并汇报结果。 这是一次性过程，如果中途出现任何错误都不会重试。
+ */
+async function execSearchTask() {
+	// 创建必要的对象
+	const dispatcher = new DispatcherPage();
+	const search_page = new BaiduSearchPage().init(dispatcher);
+
+
+	console.log("Ensuring search results page has loaded...", search_page);
+
+	// 获取搜索任务
+	const task_resp = await dispatcher.getSearchTask();
+
+	if (task_resp) {
+		// 如果有任务，则搜索指定关键词并汇报结果
+		const results = await search_page.search(task_resp.keyword);
+		dispatcher.reportSearchResult(results);
+	} else {
+		console.warn("No search task received from dispatcher after multiple attempts, giving up");
+	}
 }
 
 
 (async () => {
 
-	const search_page = new BaiduSearchPage().init();
 
-	let results: SearchResultEntry[];;
-
-	console.log("Ensuring search results page has loaded...", search_page);
-
-	const re_extract = async () => {
-		if (search_page._hasContentLeft) {
-			results = await search_page.extractResults();
-		} else {
-			results = await search_page.search("穿越火线");
-		}
-		console.log(results);
-	}
-
-	re_extract();
-
-	//@ts-ignore
-	window.re_extract = re_extract;
+	execSearchTask();
 
 })();
 
